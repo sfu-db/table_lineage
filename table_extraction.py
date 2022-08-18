@@ -4,7 +4,10 @@ import os
 import re
 import psycopg2
 from py4j.java_gateway import JavaGateway
+from py4j.protocol import Py4JNetworkError
+from time import sleep
 from subprocess import *
+from diagram.table import TableDiagram
 
 cwd = os.getcwd()
 jar_file = cwd + "/test_jdbc-1.0-SNAPSHOT-jar-with-dependencies.jar"
@@ -55,7 +58,10 @@ def table_extraction(url, username, password, path):
             gateway.close()
         except:
             print(f"error in the SQL")
+    table_filter = list(set(",".join(table_list).split(",")))
+    table_dict = {key: value for key, value in table_dict.items() if key in table_filter}
     df = pd.DataFrame({'file': file_list, 'original sql': org_sql_list, 'sql':sql_list, 'tables': table_list})
+    generate_diagram(table_dict, df)
     return df, table_dict
 
 def _check_db_connection(conn_string):
@@ -79,11 +85,13 @@ def _check_connection():
         print("gateway tested")
         test_gateway.close()
 
+
 def _start_gateway():
     args = [jar_file] # Any number of args to be passed to the jar file
     p = Popen(['java', '-jar']+list(args), stdout=PIPE, stderr=PIPE, shell = True)
     print("gateway opened")
     _check_connection()
+
 
 def _get_files(path):
     if os.path.isfile(path):
@@ -366,3 +374,43 @@ WHERE v.schemaname != 'pg_catalog' AND v.schemaname != 'information_schema' AND 
         temp[i+'_definition'] = view_sql[view_sql['view_name'] == i]['definition'].values[0]
         view_dict[i] = temp
     return overview_dict, table_dict, view_dict
+
+
+def generate_diagram_tables(tables, table_df):
+    table_names = set(tables.keys())
+    json_tables = [
+        # {"key": "Table", "text": "Table Definition", "isGroup": True},
+        # {"key": "SQL", "text": "SQL File", "isGroup": True}
+    ]
+    for table_name in table_names:
+        json_table_description = {"key": table_name, "group": "Table"}
+        table_items = []
+        for key, val in tables[table_name].items():
+            if key == "constraints" or key.endswith("num_of_parents") or key.endswith("num_of_children") or key.endswith("num_of_row") or key.endswith("num_of_cols"):
+                continue
+            json_column = {
+                "name": key,
+                "figure": "Circle",
+                "color": "green"
+            }
+            table_items.append(json_column)
+        json_table_description["items"] = table_items
+        json_tables.append(json_table_description)
+    json_tables.extend([{"key": r, "group": "SQL"} for r in table_df['file']])
+    return json_tables
+
+
+def generate_diagram_relationships(table_df):
+    json_relationships = []
+    for row in table_df.iterrows():
+        for table in row[1]['tables'].split(","):
+            json_edge = {"from": table, "to": row[1]['file']}
+            json_relationships.append(json_edge)
+    return json_relationships
+
+
+def generate_diagram(tables, table_df):
+    table_diagram = TableDiagram()
+    diagram_tables = generate_diagram_tables(tables, table_df)
+    diagram_relationships = generate_diagram_relationships(table_df)
+    table_diagram.generate_html_file(diagram_tables, diagram_relationships, "tables.html")
