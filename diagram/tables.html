@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <script src="gojs/go.js"></script>
+    <script src="gojs/Figures.js"></script>
+    <script src="gojs/ZoomSlider.js"></script>
+    <link rel="stylesheet" href="gojs/ZoomSlider.css"/>
+    <script>
+    function init() {
+        const $ = go.GraphObject.make;
+        let alignmentSelect = document.getElementById('diagram-alignment-list');
+        myDiagram =
+            $(go.Diagram, "myDiagramDiv",
+                {
+                    allowDelete: false,
+                    allowCopy: false,
+                    layout: $(go.TreeLayout, {alignment: go.TreeLayout.AlignmentBottomRightBus}),
+                    "undoManager.isEnabled": true
+                });
+
+        function diagramInfo(model) {
+            return "Model:\n" + model.nodeDataArray.length + " nodes, " +
+                model.linkDataArray.length + " links";
+        }
+
+        alignmentSelect.addEventListener("change", (event) => {
+            myDiagram.layout = $(go.TreeLayout, {alignment: go.TreeLayout[event.target.value]});
+        });
+
+        myDiagram.toolTip =
+            $("ToolTip",
+                $(go.TextBlock, {margin: 4},
+                    new go.Binding("text", "", diagramInfo))
+            );
+        myDiagram.groupTemplate =
+            $(go.Group, "Vertical",
+                {
+                    selectionObjectName: "PH",
+                    locationObjectName: "PH"
+                },
+                new go.Binding("location", "loc", go.Point.parse),
+                $(go.TextBlock,  // group title
+                    {font: "Bold 12pt Sans-Serif"},
+                    new go.Binding("text", "key")),
+                $(go.Shape,  // using a Shape instead of a Placeholder
+                    {
+                        name: "PH",
+                        fill: "lightyellow"
+                    },
+                    new go.Binding("desiredSize", "size", go.Size.parse))
+            );
+
+        var itemTempl =
+            $(go.Panel, "Horizontal",
+                {
+                    toolTip:
+                        $("ToolTip",
+                            $(go.Panel, "Table",
+                                {margin: 8, stretch: go.GraphObject.Fill},
+                                $(go.RowColumnDefinition, {row: 0, sizing: go.RowColumnDefinition.None}),
+                                $(go.TextBlock,
+                                    {
+                                        row: 0, alignment: go.Spot.Center,
+                                        margin: new go.Margin(0, 24, 0, 2),
+                                        font: "bold 16px sans-serif"
+                                    },
+                                    new go.Binding("text", "key")),
+                            ))
+                },
+                $(go.Shape,
+                    {desiredSize: new go.Size(15, 15), strokeJoin: "round", strokeWidth: 3, stroke: null, margin: 2},
+                    new go.Binding("figure", "figure"),
+                    new go.Binding("fill", "color"),
+                    new go.Binding("stroke", "color")),
+                $(go.TextBlock,
+                    {
+                        stroke: "#333333",
+                        font: "bold 14px sans-serif",
+                        alignment: go.Spot.Left
+                    },
+                    new go.Binding("text", "name"))
+            );
+
+        myDiagram.nodeTemplate =
+            $(go.Node, "Auto",
+                {
+                    selectionAdorned: true,
+                    resizable: true,
+                    layoutConditions: go.Part.LayoutStandard & ~go.Part.LayoutNodeSized,
+                    fromSpot: go.Spot.AllSides,
+                    toSpot: go.Spot.AllSides,
+                    isShadowed: true,
+                    shadowOffset: new go.Point(3, 3),
+                    shadowColor: "#C5C1AA",
+                    toolTip:
+                        $("ToolTip",
+                            $(go.TextBlock, {margin: 4},
+                                new go.Binding("text", "key"))
+                        )
+                },
+                new go.Binding("location", "location").makeTwoWay(),
+                new go.Binding("desiredSize", "visible", v => new go.Size(NaN, NaN)).ofObject("LIST"),
+                $(go.Shape, "RoundedRectangle",
+                    {fill: 'white', stroke: "#eeeeee", strokeWidth: 3}),
+                $(go.Panel, "Table",
+                    {margin: 8, stretch: go.GraphObject.Fill},
+                    $(go.RowColumnDefinition, {row: 0, sizing: go.RowColumnDefinition.None}),
+                    $(go.TextBlock,
+                        {
+                            row: 0, alignment: go.Spot.Center,
+                            margin: new go.Margin(0, 24, 0, 2),
+                            font: "bold 16px sans-serif"
+                        },
+                        new go.Binding("text", "key")),
+                    $("PanelExpanderButton", "LIST",
+                        {row: 0, alignment: go.Spot.TopRight}),
+                    $(go.Panel, "Vertical",
+                        {
+                            name: "LIST",
+                            row: 1,
+                            padding: 3,
+                            alignment: go.Spot.TopLeft,
+                            defaultAlignment: go.Spot.Left,
+                            stretch: go.GraphObject.Horizontal,
+                            itemTemplate: itemTempl
+                        },
+                        new go.Binding("itemArray", "items"))
+                )
+            );
+
+        myDiagram.linkTemplate =
+            $(go.Link,
+                {
+                    selectionAdorned: true,
+                    layerName: "Foreground",
+                    reshapable: true,
+                    routing: go.Link.AvoidsNodes,
+                    corner: 5,
+                    curve: go.Link.JumpOver
+                },
+                $(go.Shape,
+                    {stroke: "#303B45", strokeWidth: 2.5})
+            );
+
+        let nodeDataArray = JSON.parse('[{"key": "mimiciii_clinical.patients", "group": "Table", "items": []}, {"key": "basic_patient_info.sql", "group": "SQL"}, {"key": "no_dob.sql", "group": "SQL"}]');
+        let linkDataArray = JSON.parse('[{"from": "mimiciii_clinical.patients", "to": "basic_patient_info.sql"}, {"from": "mimiciii_clinical.basic_patient_info", "to": "no_dob.sql"}]');
+        myDiagram.model = new go.GraphLinksModel(
+            {
+                copiesArrays: true,
+                copiesArrayObjects: true,
+                nodeDataArray: nodeDataArray,
+                linkDataArray: linkDataArray
+            });
+
+        zoomSlider = new ZoomSlider(myDiagram);
+        myDiagram.select(myDiagram.findNodeForKey("Table"));
+        myDiagram.select(myDiagram.findNodeForKey("SQL"));
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+</script>
+</head>
+<body class="hold-transition skin-blue layout-top-nav">
+<section class="content">
+    
+    <div class="box box-primary">
+        <div class="box-header with-border">
+            <i class="fa fa-code-fork"></i>
+            <h3 class="box-title">Tables</h3>
+        </div>
+        <section class="interactive-diagrams">
+            <label for="diagram-alignment-list">Alignment</label>
+            <select id="diagram-alignment-list">
+                <option value="AlignmentTopLeftBus">AlignmentTopLeftBus</option>
+                <option value="AlignmentBottomRightBus">AlignmentBottomRightBus</option>
+            </select>
+            <div id="interactive-diagrams" class="p-4 w-full">
+                <div id="myDiagramDiv"
+                     style="background-color: white; border: 1px solid black; width: 100%; height: 1000px; position: relative; cursor: auto;">
+                    <canvas tabindex="0" width="2108" height="1396"
+                            style="position: absolute; top: 0px; left: 0px; z-index: 2; touch-action: none; width: 1054px; height: 698px; cursor: auto;">
+                        This text is displayed if your browser does not support the Canvas HTML element.
+                    </canvas>
+                    <div style="position: absolute; overflow: auto; width: 1054px; height: 698px; z-index: 1;">
+                        <div style="position: absolute; width: 1px; height: 1px;"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    
+    
+</section>
+</body>
+</html>

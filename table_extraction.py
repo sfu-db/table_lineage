@@ -12,7 +12,7 @@ from diagram.table import TableDiagram
 cwd = os.getcwd()
 jar_file = cwd + "/test_jdbc-1.0-SNAPSHOT-jar-with-dependencies.jar"
 
-def table_extraction(url, username, password, path):
+def table_extraction(url, username, password, path, schema):
     _start_gateway()
     gateway = JavaGateway()
     conn_type = url.split(':')[0]
@@ -27,23 +27,12 @@ def table_extraction(url, username, password, path):
     org_sql_list = []
     sql_list = []
     table_list = []
+    new_view_list = []
     for f in sql_files:
         org_sql = open(f, mode='r', encoding='utf-8-sig').read()
+        sql = _preprocess_str(org_sql)
         # special treatment for mimic dataset, should be changed later on
-        sql = _preprocess_str(org_sql).replace('physionet-data.', '').replace('oe.VALUE', 'oe.value_temp')
-        temp = sql.split('JOIN')
-        t = []
-        if len(temp) >= 1:
-            for i in temp[1:]:
-                t.append(i.split(maxsplit=1)[0])
-        temp = sql.split('FROM')
-        if len(temp) >= 1:
-            for i in temp[1:]:
-                t.append(i.split(maxsplit=1)[0])
-        for i in t:
-            if "mimiciii_clinical." + i in overview_dict['table_names']:
-                sql = sql.replace(i, "mimiciii_clinical." + i)
-                sql = sql.replace("mimiciii_clinical.mimiciii_clinical." + i, "mimiciii_clinical." + i)
+        sql = _special_treatments(sql, overview_dict)
         sql = sql.lower()
         # special treatment ends here
         #print(sql)
@@ -53,16 +42,20 @@ def table_extraction(url, username, password, path):
             org_sql_list.append(org_sql)
             table_list.append(extracted_tables)
             sql_list.append(sql)
-            print(f, extracted_tables)
-            #print(df)
+            name = os.path.basename(f)[:-4]
+            if schema + "." + name not in overview_dict['table_names'] and schema + "." + name not in overview_dict['view_names']:
+                _create_view(schema, name, conn_string, org_sql, overview_dict)
+                new_view_list.append(schema + "." + name)
             gateway.close()
         except:
             print(f"error in the SQL")
+    overview_dict, table_dict, view_dict = _plot_postgres_db(postgres_engine)
     table_filter = list(set(",".join(table_list).split(",")))
     table_dict = {key: value for key, value in table_dict.items() if key in table_filter}
     df = pd.DataFrame({'file': file_list, 'original sql': org_sql_list, 'sql':sql_list, 'tables': table_list})
+    _delete_view(new_view_list, conn_string)
     generate_diagram(table_dict, df)
-    return df, table_dict
+    return df
 
 def _check_db_connection(conn_string):
     try:
@@ -85,13 +78,39 @@ def _check_connection():
         print("gateway tested")
         test_gateway.close()
 
-
 def _start_gateway():
     args = [jar_file] # Any number of args to be passed to the jar file
     p = Popen(['java', '-jar']+list(args), stdout=PIPE, stderr=PIPE, shell = True)
     print("gateway opened")
     _check_connection()
 
+def _create_view(schema, name, conn_string, org_sql, overview_dict):
+    #preprocess SQL
+    create_sql = _special_treatments(_remove_comments(org_sql), overview_dict)
+    create_sql = create_sql.replace('`', '').strip()
+    create_sql = re.sub(r"DATETIME_DIFF\((.+?),\s?(.+?),\s?(DAY|MINUTE|SECOND|HOUR|YEAR)\)", r"DATETIME_DIFF(\1, \2, '\3'::TEXT)", create_sql)
+    #connect and create view
+    conn = psycopg2.connect(conn_string)
+    cur = conn.cursor()
+    cur.execute("""SET search_path TO {};""".format(schema))
+    cur.execute("""CREATE VIEW {}.{} AS {}""".format(schema, name, create_sql))
+    #cur.fetchall()
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(schema + "." + name + " created")
+
+def _delete_view(new_view_list, conn_string):
+    # reverse it just in case to drop dependencies first
+    new_view_list = new_view_list[::-1]
+    conn = psycopg2.connect(conn_string)
+    cur = conn.cursor()
+    for i in new_view_list:
+        cur.execute("""DROP VIEW {} CASCADE""".format(i))
+        print(i + " dropped")
+    conn.commit()
+    cur.close()
+    conn.close()
 
 def _get_files(path):
     if os.path.isfile(path):
@@ -101,6 +120,34 @@ def _get_files(path):
     else:
         sql_files = []
     return sql_files
+
+def _special_treatments(sql, overview_dict):
+    sql = sql.replace('physionet-data.', '').replace('value', 'value_temp').replace('VALUE', 'value_temp').replace('mimiciii_derived', 'mimiciii_clinical').replace('mimiciii_notes', 'mimiciii_clinical')
+    temp = sql.split('JOIN')
+    t = []
+    if len(temp) >= 1:
+        for i in temp[1:]:
+            t.append(i.split(maxsplit=1)[0])
+    temp = sql.split('FROM')
+    if len(temp) >= 1:
+        for i in temp[1:]:
+            t.append(i.split(maxsplit=1)[0])
+    #resolve WITH tables
+    for i in t:
+        idx = sql.index(i)
+        if idx >= 5:
+            if sql[idx-5:idx-1] == "with" or sql[idx-5:idx-1] == "WITH":
+                t.pop(t.index(i))
+                continue
+        if idx >= 1:
+            if sql[idx-1] == "," or sql[idx-2:idx] == " ," or sql[idx-2:idx] == ", ":
+                t.pop(t.index(i))
+                continue
+    for i in t:
+        if "mimiciii_clinical." + i in overview_dict['table_names']:
+            sql = sql.replace(i, "mimiciii_clinical." + i)
+            sql = sql.replace("mimiciii_clinical.mimiciii_clinical." + i, "mimiciii_clinical." + i)
+    return sql
 
 def _find_parens(s):
     toret = {}
@@ -117,7 +164,7 @@ def _find_parens(s):
         raise IndexError("No matching opening parens at: " + str(pstack.pop()))
     return toret
 
-def _preprocess_str(str1):
+def _remove_comments(str1):
     # remove the /* */ comments
     q = re.sub(r"/\*[^*]*\*+(?:[^*/][^*]*\*+)*/", "", str1)
     # remove whole line -- and # comments
@@ -128,6 +175,10 @@ def _preprocess_str(str1):
     q = re.sub(r'\s*,\s*', ',', q)
     # replace all multiple spaces to one space
     str1 = re.sub("\s\s+", " ", q)
+    return str1
+
+def _preprocess_str(str1):
+    str1 = _remove_comments(str1)
     str1 = re.sub('union distinct', 'UNION', str1, flags=re.IGNORECASE)
     # bracket positions
     toret = _find_parens(str1)
@@ -193,7 +244,7 @@ def _preprocess_str(str1):
         if date_idx in toret.keys():
             s = str1[date_idx-12:toret[date_idx]+1]
             temp = s.split(',')
-            #print(temp)
+            #sub = "TIMESTAMPADD(" + temp[-1][:-1].split(" ")[-1] + "," + re.split(r"(.*)(?=\s)", s)[1].split('INTERVAL')[-1] + "," + re.split(r"(\()(.*)", re.split(r"(.*)(?=\,)", s)[1])[-2].split(',')[0] + ")"
             sub = "TIMESTAMPADD(" + temp[-1][:-1].split(" ")[-1] + "," + re.split(r"(.*)(?=\s)", s)[1].split('INTERVAL')[-1] + "," + re.split(r"(\()(.*)", re.split(r"(.*)(?=\,)", s)[1])[-2] + ")"
             str1 = str1[:date_idx-12] + sub + str1[toret[date_idx]+1:]
             toret = _find_parens(str1)
@@ -374,7 +425,6 @@ WHERE v.schemaname != 'pg_catalog' AND v.schemaname != 'information_schema' AND 
         temp[i+'_definition'] = view_sql[view_sql['view_name'] == i]['definition'].values[0]
         view_dict[i] = temp
     return overview_dict, table_dict, view_dict
-
 
 def generate_diagram_tables(tables, table_df):
     table_names = set(tables.keys())
