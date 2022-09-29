@@ -5,6 +5,11 @@ import re
 import psycopg2
 from py4j.java_gateway import JavaGateway
 from subprocess import *
+<<<<<<< Updated upstream
+=======
+from diagram.table import TableDiagram
+import traceback
+>>>>>>> Stashed changes
 
 cwd = os.getcwd()
 jar_file = cwd + "/test_jdbc-1.0-SNAPSHOT-jar-with-dependencies.jar"
@@ -53,8 +58,16 @@ def table_extraction(url, username, password, path):
             print(f, extracted_tables)
             #print(df)
             gateway.close()
+<<<<<<< Updated upstream
         except:
             print(f"error in the SQL")
+=======
+        except Exception as e:
+            print(e)
+    overview_dict, table_dict, view_dict = _plot_postgres_db(postgres_engine)
+    table_filter = list(set(",".join(table_list).split(",")))
+    table_dict = {key: value for key, value in table_dict.items() if key in table_filter}
+>>>>>>> Stashed changes
     df = pd.DataFrame({'file': file_list, 'original sql': org_sql_list, 'sql':sql_list, 'tables': table_list})
     return df, table_dict
 
@@ -85,6 +98,38 @@ def _start_gateway():
     print("gateway opened")
     _check_connection()
 
+<<<<<<< Updated upstream
+=======
+def _create_view(schema, name, conn_string, org_sql, overview_dict):
+    #preprocess SQL
+    create_sql = _special_treatments(_remove_comments(org_sql), overview_dict)
+    create_sql = create_sql.replace('`', '').strip()
+    create_sql = re.sub(r"DATETIME_DIFF\((.+?),\s?(.+?),\s?(DAY|MINUTE|SECOND|HOUR|YEAR)\)", r"DATETIME_DIFF(\1, \2, '\3'::TEXT)", create_sql)
+    #connect and create view
+    conn = psycopg2.connect(conn_string)
+    cur = conn.cursor()
+    cur.execute("""SET search_path TO {};""".format(schema))
+    #print(create_sql)
+    cur.execute("""CREATE VIEW {}.{} AS {}""".format(schema, name, create_sql))
+    #cur.fetchall()
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(schema + "." + name + " created")
+
+def _delete_view(new_view_list, conn_string):
+    # reverse it just in case to drop dependencies first
+    new_view_list = new_view_list[::-1]
+    conn = psycopg2.connect(conn_string)
+    cur = conn.cursor()
+    for i in new_view_list:
+        cur.execute("""DROP VIEW {} CASCADE""".format(i))
+        print(i + " dropped")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+>>>>>>> Stashed changes
 def _get_files(path):
     if os.path.isfile(path):
         sql_files = [path]
@@ -94,6 +139,37 @@ def _get_files(path):
         sql_files = []
     return sql_files
 
+<<<<<<< Updated upstream
+=======
+def _special_treatments(sql, overview_dict):
+    sql = sql.replace('physionet-data.', '').replace('mimiciii_derived', 'mimiciii_clinical').replace('mimiciii_notes', 'mimiciii_clinical')
+    temp = sql.split('JOIN')
+    t = []
+    if len(temp) >= 1:
+        for i in temp[1:]:
+            t.append(i.split(maxsplit=1)[0])
+    temp = sql.split('FROM')
+    if len(temp) >= 1:
+        for i in temp[1:]:
+            t.append(i.split(maxsplit=1)[0])
+    #resolve WITH tables
+    for i in t:
+        idx = sql.index(i)
+        if idx >= 5:
+            if sql[idx-5:idx-1] == "with" or sql[idx-5:idx-1] == "WITH":
+                t.pop(t.index(i))
+                continue
+        if idx >= 1:
+            if sql[idx-1] == "," or sql[idx-2:idx] == " ," or sql[idx-2:idx] == ", ":
+                t.pop(t.index(i))
+                continue
+    for i in t:
+        if "mimiciii_clinical." + i in overview_dict['table_names']:
+            sql = sql.replace(i, "mimiciii_clinical." + i)
+            sql = sql.replace("mimiciii_clinical.mimiciii_clinical." + i, "mimiciii_clinical." + i)
+    return sql
+
+>>>>>>> Stashed changes
 def _find_parens(s):
     toret = {}
     pstack = []
@@ -120,6 +196,18 @@ def _preprocess_str(str1):
     q = re.sub(r'\s*,\s*', ',', q)
     # replace all multiple spaces to one space
     str1 = re.sub("\s\s+", " ", q)
+<<<<<<< Updated upstream
+=======
+    # adjust to create view
+    idx = str1.find("CREATE VIEW")
+    if idx != -1:
+        idx = str1.find("AS", idx)
+        str1 = str1[idx+3:]
+    return str1
+
+def _preprocess_str(str1):
+    str1 = _remove_comments(str1)
+>>>>>>> Stashed changes
     str1 = re.sub('union distinct', 'UNION', str1, flags=re.IGNORECASE)
     # bracket positions
     toret = _find_parens(str1)
@@ -185,8 +273,13 @@ def _preprocess_str(str1):
         if date_idx in toret.keys():
             s = str1[date_idx-12:toret[date_idx]+1]
             temp = s.split(',')
+<<<<<<< Updated upstream
             #print(temp)
             sub = "TIMESTAMPADD(" + temp[-1][:-1].split(" ")[-1] + "," + re.split(r"(.*)(?=\s)", s)[1].split('INTERVAL')[-1] + "," + re.split(r"(\()(.*)", re.split(r"(.*)(?=\,)", s)[1])[-2] + ")"
+=======
+            sub = "TIMESTAMPADD(" + temp[-1][:-1].split(" ")[-1] + "," + re.split(r"(.*)(?=\s)", s)[1].split('INTERVAL')[-1] + "," + re.split(r"(\()(.*)", re.split(r"(.*)(?=\,)", s)[1])[-2].split(',')[0] + ")"
+            #sub = "TIMESTAMPADD(" + temp[-1][:-1].split(" ")[-1] + "," + re.split(r"(.*)(?=\s)", s)[1].split('INTERVAL')[-1] + "," + re.split(r"(\()(.*)", re.split(r"(.*)(?=\,)", s)[1])[-2] + ")"
+>>>>>>> Stashed changes
             str1 = str1[:date_idx-12] + sub + str1[toret[date_idx]+1:]
             toret = _find_parens(str1)
             date_idx = re.search('DATETIME_ADD', str1, flags=re.IGNORECASE).start() + 12 if i < date_nums -1 else None
